@@ -6,7 +6,7 @@ import sqlite3
 import time
 
 # ================== TOKEN ==================
-TOKEN = os.getenv("")
+TOKEN = os.getenv("BOT_TOKEN")
 
 # ================== DATABASE ==================
 conn = sqlite3.connect("users.db", check_same_thread=False)
