@@ -6,7 +6,7 @@ import sqlite3
 import time
 
 # ================== TOKEN ==================
-TOKEN = os.getenv("8616970148:AAHVKHENxDxHD3fqEmMK8FrPgf2dL_Mr8cw")
+TOKEN = os.getenv("")
 
 # ================== DATABASE ==================
 conn = sqlite3.connect("users.db", check_same_thread=False)
