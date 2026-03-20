@@ -1,7 +1,7 @@
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
-    ContextTypes, filters
+    ContextTypes, filters, CallbackQueryHandler
 )
 
 import sqlite3
@@ -23,7 +23,6 @@ CREATE TABLE IF NOT EXISTS users(
     age INTEGER,
     gender TEXT,
     country TEXT,
-    rating REAL DEFAULT 0,
     likes INTEGER DEFAULT 0,
     dislikes INTEGER DEFAULT 0
 )
@@ -59,33 +58,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if is_registered(user):
         await update.message.reply_text(
-            "👋 Welcome Back!\n\n"
-            "Use /chat to find partner ❤️\n"
-            "/profile to view your profile"
+            "👫 Partner Matched 👫\n"
+            "Welcome To DM Dating Bot ❤️\n"
+            "/chat - Find partner\n"
+            "/link - Share Profile Link\n"
+            "/stop - End chat"
         )
     else:
         user_step[user] = "name"
         await update.message.reply_text("👤 Enter Name:")
-
-# ================= PROFILE =================
-async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.message.chat_id
-
-    data = cursor.execute(
-        "SELECT name, age, gender, country, rating FROM users WHERE user_id=?",
-        (user,)
-    ).fetchone()
-
-    if data:
-        await update.message.reply_text(
-            f"👤 Name: {data[0]}\n"
-            f"📅 Age: {data[1]}\n"
-            f"⚧ Gender: {data[2]}\n"
-            f"🌍 Country: {data[3]}\n"
-            f"⭐ Rating: {round(data[4],2)}"
-        )
-    else:
-        await update.message.reply_text("❌ No profile found")
 
 # ================= REGISTRATION =================
 async def handle_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -105,36 +86,29 @@ async def handle_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif step == "age":
         try:
             age = int(text)
-            if age < 18:
-                await update.message.reply_text("❌ 18+ only")
-                return
-            user_temp[user]["age"] = age
         except:
-            await update.message.reply_text("❌ Valid age")
+            await update.message.reply_text("❌ Invalid age")
             return
 
+        user_temp[user]["age"] = age
         user_step[user] = "gender"
         await update.message.reply_text("⚧ Gender?")
 
     elif step == "gender":
-        if text.lower() not in ["male", "female"]:
-            await update.message.reply_text("❌ male/female only")
-            return
-
-        user_temp[user]["gender"] = text.lower()
+        user_temp[user]["gender"] = text
         user_step[user] = "country"
         await update.message.reply_text("🌍 Country?")
 
     elif step == "country":
         user_temp[user]["country"] = text
 
-        data = user_temp[user]
+        d = user_temp[user]
 
         cursor.execute("""
         INSERT OR REPLACE INTO users
         (user_id, name, age, gender, country)
         VALUES (?, ?, ?, ?, ?)
-        """, (user, data["name"], data["age"], data["gender"], data["country"]))
+        """, (user, d["name"], d["age"], d["gender"], d["country"]))
 
         conn.commit()
 
@@ -150,65 +124,83 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Register first")
         return
 
-    user_gender = cursor.execute(
-        "SELECT gender FROM users WHERE user_id=?",
-        (user,)
-    ).fetchone()[0]
+    if user in active_chats:
+        await update.message.reply_text("❌ Already in chat")
+        return
 
-    random.shuffle(waiting_users)
+    if waiting_users:
+        partner = waiting_users.pop(0)
 
-    for partner in waiting_users:
-        partner_gender = cursor.execute(
-            "SELECT gender FROM users WHERE user_id=?",
+        active_chats[user] = partner
+        active_chats[partner] = user
+
+        # Profile info
+        p = cursor.execute(
+            "SELECT age, country, likes, dislikes FROM users WHERE user_id=?",
             (partner,)
-        ).fetchone()[0]
+        ).fetchone()
 
-        if partner_gender != user_gender:
+        u = cursor.execute(
+            "SELECT age, country, likes, dislikes FROM users WHERE user_id=?",
+            (user,)
+        ).fetchone()
 
-            waiting_users.remove(partner)
+        msg = (
+            "👫 Partner Matched 👫\n"
+            "Welcome To DM Dating Bot ❤️\n"
+            "/chat - Find partner\n"
+            "/link - Share Profile Link\n"
+            "/stop - End chat"
+        )
 
-            active_chats[user] = partner
-            active_chats[partner] = user
+        await context.bot.send_message(user, msg)
+        await context.bot.send_message(partner, msg)
 
-            p = cursor.execute(
-                "SELECT age, country, rating FROM users WHERE user_id=?",
-                (partner,)
-            ).fetchone()
+    else:
+        waiting_users.append(user)
+        await update.message.reply_text("⏳ Waiting...")
 
-            u = cursor.execute(
-                "SELECT age, country, rating FROM users WHERE user_id=?",
-                (user,)
-            ).fetchone()
-
-            await context.bot.send_message(
-                user,
-                f"❤️ Connected!\nAge:{p[0]}\nCountry:{p[1]}\n⭐Rating:{round(p[2],2)}"
-            )
-
-            await context.bot.send_message(
-                partner,
-                f"❤️ Connected!\nAge:{u[0]}\nCountry:{u[1]}\n⭐Rating:{round(u[2],2)}"
-            )
-
-            return
-
-    waiting_users.append(user)
-    await update.message.reply_text("⏳ Waiting...")
-
-# ================= SKIP =================
-async def skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ================= RELAY (TEXT) =================
+async def relay_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.chat_id
+
+    if not check_spam(user):
+        return
 
     if user in active_chats:
         partner = active_chats[user]
 
-        del active_chats[user]
-        del active_chats[partner]
+        await context.bot.send_message(
+            partner,
+            f"👤 User:\n{update.message.text}"
+        )
 
-        waiting_users.append(partner)
+# ================= MEDIA WITH WATERMARK =================
+async def relay_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.message.chat_id
 
-        await update.message.reply_text("⏭ Skipped")
-        await context.bot.send_message(partner, "⏭ Partner skipped")
+    if user not in active_chats:
+        return
+
+    partner = active_chats[user]
+
+    caption = f"📸 Sent by User ID: {user}"
+
+    if update.message.photo:
+        file = update.message.photo[-1].file_id
+        await context.bot.send_photo(partner, file, caption=caption)
+
+    elif update.message.video:
+        file = update.message.video.file_id
+        await context.bot.send_video(partner, file, caption=caption)
+
+# ================= PROFILE LINK =================
+async def link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.message.chat_id
+
+    await update.message.reply_text(
+        f"🔗 Profile Link:\nhttps://t.me/YOUR_BOT_USERNAME?start={user}"
+    )
 
 # ================= STOP + RATING =================
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -220,36 +212,42 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del active_chats[user]
         del active_chats[partner]
 
+        keyboard = [
+            [
+                InlineKeyboardButton("👍 Like", callback_data=f"like_{partner}"),
+                InlineKeyboardButton("👎 Dislike", callback_data=f"dislike_{partner}")
+            ]
+        ]
+
+        await update.message.reply_text(
+            "⭐ Rate Your Partner:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+        await context.bot.send_message(partner, "❌ Chat Ended")
+
+# ================= BUTTON HANDLER =================
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    action, partner = query.data.split("_")
+    partner = int(partner)
+
+    if action == "like":
+        cursor.execute(
+            "UPDATE users SET likes = likes + 1 WHERE user_id=?",
+            (partner,)
+        )
+    else:
         cursor.execute(
             "UPDATE users SET dislikes = dislikes + 1 WHERE user_id=?",
             (partner,)
         )
 
-        cursor.execute("""
-        UPDATE users
-        SET rating = likes * 1.0 / (likes + dislikes + 1)
-        """)
+    conn.commit()
 
-        conn.commit()
-
-        await update.message.reply_text("❌ Chat ended")
-        await context.bot.send_message(partner, "❌ Chat ended")
-
-# ================= RELAY =================
-async def relay(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.message.chat_id
-
-    if not check_spam(user):
-        return
-
-    if user in active_chats:
-        partner = active_chats[user]
-
-        await context.bot.copy_message(
-            chat_id=partner,
-            from_chat_id=user,
-            message_id=update.message.message_id
-        )
+    await query.edit_message_text("✅ Thanks for rating!")
 
 # ================= MAIN =================
 def main():
@@ -257,14 +255,16 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("chat", chat))
-    app.add_handler(CommandHandler("skip", skip))
     app.add_handler(CommandHandler("stop", stop))
-    app.add_handler(CommandHandler("profile", profile))
+    app.add_handler(CommandHandler("link", link))
 
+    app.add_handler(CallbackQueryHandler(button))
+
+    app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO, relay_media))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_profile))
-    app.add_handler(MessageHandler(filters.ALL, relay))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, relay_text))
 
-    print("🚀 Next Level Bot Running")
+    print("🚀 Bot Running...")
     app.run_polling()
 
 if __name__ == "__main__":
